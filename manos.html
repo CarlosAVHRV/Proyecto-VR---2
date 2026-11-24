@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#000000" />
+    <title>Acaricia la fauna RA</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.11.13/p5.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@ar-js-org/artoolkit5-js@0.3.2/dist/ARToolkit.js"></script>
+    <script src="nyar4p5.js"></script>
+    <style>
+      html, body { margin: 0; height: 100%; overflow: hidden; background: #000; color: #fff;
+        font: 15px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif;
+        -webkit-tap-highlight-color: transparent; user-select: none; -webkit-user-select: none; }
+
+      /* capas: cámara + marcador + animales 3D (p5, nyar4p5 lo centra en "cover") → mano y corazones (2D) → interfaz */
+      canvas.p5Canvas { z-index: 1; touch-action: none; }
+      #capa { position: fixed; inset: 0; width: 100%; height: 100%; z-index: 2; pointer-events: none; }
+
+      #top { position: fixed; top: 0; left: 0; right: 0; z-index: 3; pointer-events: none;
+        padding: calc(env(safe-area-inset-top) + 10px) 16px 12px; background: linear-gradient(#000b, #0000); }
+      .fila { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+      #estado { display: flex; align-items: center; gap: 8px; font-weight: 600; text-shadow: 0 1px 3px #000; min-width: 0;
+        pointer-events: auto; cursor: pointer; }
+
+      #diag { position: fixed; left: 12px; right: 12px; top: calc(env(safe-area-inset-top) + 96px); z-index: 5;
+        max-width: 560px; margin: 0 auto; padding: 12px; border-radius: 12px; background: rgba(5, 10, 15, .92);
+        border: 1px solid #fff3; max-height: 55vh; overflow: auto; }
+      #diag[hidden] { display: none; }
+      #diag pre { margin: 0 0 10px; white-space: pre-wrap; word-break: break-word; font: 12px/1.45 ui-monospace, Consolas, monospace; color: #d7e3ee; }
+      #diag button { font: 600 13px system-ui, sans-serif; color: #111; background: #fff; border: 0; border-radius: 999px; padding: 6px 14px; cursor: pointer; }
+      #estado span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .dot { width: 10px; height: 10px; border-radius: 50%; background: #f1c40f; flex: none; }
+      .dot.ok { background: #2ecc71; } .dot.error { background: #e74c3c; }
+      .acciones { display: flex; gap: 6px; flex: none; }
+      .acciones a, .acciones button { pointer-events: auto; color: #fff; background: #fff2; border: 1px solid #fff5; cursor: pointer;
+        padding: 6px 12px; border-radius: 999px; text-decoration: none; font: 600 13px system-ui, sans-serif; white-space: nowrap; }
+      .acciones button[aria-pressed="true"] { background: #fff; color: #111; }
+
+      #animales { display: flex; gap: 6px; margin-top: 10px; overflow-x: auto; scrollbar-width: none; pointer-events: auto; }
+      #animales::-webkit-scrollbar { display: none; }
+      #animales button { flex: none; font: 600 13px system-ui, sans-serif; color: #fff; cursor: pointer;
+        background: #0008; border: 1px solid #fff4; border-radius: 999px; padding: 7px 12px;
+        transition: background .15s, border-color .15s, transform .1s; }
+      #animales button:active { transform: scale(.96); }
+      #animales button[aria-pressed="true"] { background: #ffb35c; border-color: #ffb35c; color: #1a1205; }
+
+      #toast { position: fixed; left: 50%; top: 34%; z-index: 4; pointer-events: none; transform: translate(-50%, -8px) scale(.96);
+        opacity: 0; padding: 10px 18px; border-radius: 999px; background: #fffbf4; color: #2a211a; font-weight: 800; font-size: 16px;
+        box-shadow: 0 8px 24px #0006; white-space: nowrap; transition: opacity .25s, transform .35s cubic-bezier(.2, .9, .3, 1.3); }
+      #toast.visible { opacity: 1; transform: translate(-50%, 0) scale(1); }
+
+      #ficha { position: fixed; left: 16px; right: 16px; bottom: calc(env(safe-area-inset-bottom) + 16px); z-index: 3;
+        max-width: 480px; margin: 0 auto; padding: 14px 16px; border-radius: 16px;
+        background: rgba(10, 20, 30, .8); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+        border: 1px solid #fff2; pointer-events: none; }
+      #ficha .cab { display: flex; justify-content: space-between; align-items: baseline; gap: 10px;
+        padding-bottom: 8px; margin-bottom: 8px; border-bottom: 1px solid #fff1; }
+      #ficha .nombre { font-weight: 700; }
+      #ficha .cient { font-style: italic; color: #9fb0c0; font-size: 13px; margin-left: 4px; }
+      #ficha .badge { flex: none; font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 999px; background: #fff2; white-space: nowrap; }
+      #ficha .badge.vu { background: #f39c12; color: #1a1205; } #ficha .badge.en { background: #e74c3c; }
+      #ficha .badge.lc { background: #27ae60; } #ficha .badge.nt { background: #f1c40f; color: #1a1205; } #ficha .badge.eco { background: #2e86de; }
+      #ficha .tag { font-size: 12px; letter-spacing: .06em; text-transform: uppercase; color: #ffb35c; font-weight: 700; }
+      #ficha h2 { margin: 2px 0 6px; font-size: 17px; }
+      #ficha p { margin: 0; color: #dde6ee; font-size: 14px; }
+      #ficha .pie { margin-top: 10px; font-size: 12px; color: #9fb0c0; display: flex; justify-content: space-between; gap: 10px; }
+
+      .gestos { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 10px; }
+      .gestos span { font-size: 12px; font-weight: 600; padding: 3px 9px; border-radius: 999px; background: #fff1; color: #cfd9e2;
+        transition: background .2s, color .2s; }
+      .gestos span.activo { background: #ffb35c; color: #1a1205; }
+      body.palma .gestos [data-g="levanta"], body.palma .gestos [data-g="saludo"] { display: none; }
+      .carino { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; font-size: 12px; color: #cfd9e2; }
+      .carino .barra { flex: 1; height: 8px; border-radius: 8px; background: #fff1; overflow: hidden; }
+      .carino .barra i { display: block; height: 100%; width: 0; border-radius: 8px; background: linear-gradient(90deg, #ff8fa3, #ff4d6d); }
+
+      @media (max-width: 600px) {
+        #top { padding: calc(env(safe-area-inset-top) + 8px) 12px 10px; }
+        .largo { display: none; }
+        #ficha { left: 0; right: 0; bottom: 0; max-width: none; border-radius: 16px 16px 0 0; padding-bottom: calc(env(safe-area-inset-bottom) + 12px); }
+        #ficha p { display: none; }   /* en el celular, la tarjeta corta deja ver al animal */
+      }
+      @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+    </style>
+  </head>
+  <body>
+    <canvas id="capa"></canvas>
+
+    <div id="top">
+      <div class="fila">
+        <div id="estado"><span class="dot"></span><span>Cargando…</span></div>
+        <span class="acciones">
+          <button type="button" id="puntos" aria-pressed="false" title="Ver los 21 puntos de la mano y las zonas del animal">👁<span class="largo"> Puntos</span></button>
+          <button type="button" id="modo" aria-pressed="false" title="Poner al animal sobre tu mano">🖐️<span class="largo"> En mi mano</span></button>
+          <button type="button" id="skin" title="Piel de las manos">🧤<span class="largo"> Manos</span></button>
+          <button type="button" id="espejo" aria-pressed="false" title="Ver la cámara como un espejo">🪞<span class="largo"> Espejo</span></button>
+          <a href="hiro.png" target="_blank" rel="noopener">🎯<span class="largo"> Marcador</span></a>
+          <a href="index.html">↩<span class="largo"> Volver</span></a>
+        </span>
+      </div>
+      <nav id="animales" aria-label="Elegir animal"></nav>
+    </div>
+
+    <div id="toast" role="status"></div>
+
+    <div id="diag" hidden>
+      <pre></pre>
+      <button type="button" id="diag-cerrar">Cerrar</button>
+    </div>
+
+    <div id="ficha" class="visible" aria-live="polite">
+      <div class="cab">
+        <div><span class="nombre" id="ficha-animal"></span><span class="cient" id="ficha-cient"></span></div>
+        <span class="badge" id="ficha-badge"></span>
+      </div>
+      <div class="gestos">
+        <span data-g="toque">👆 Toca con un dedo</span>
+        <span data-g="caricia">🖐️ Acarícialo</span>
+        <span data-g="comida">🤏 Pinza al pico: comida</span>
+        <span data-g="levanta">✊ Puño: levántalo</span>
+        <span data-g="saludo">👋 Salúdalo de lejos</span>
+      </div>
+      <div class="carino"><span>Cariño</span><span class="barra"><i id="carino"></i></span><span id="carino-txt">0 %</span></div>
+      <div class="tag" id="ficha-tag"></div>
+      <h2 id="ficha-titulo"></h2>
+      <p id="ficha-texto"></p>
+      <div class="pie"><span id="ficha-num"></span><span id="ficha-hint"></span></div>
+    </div>
+
+    <script src="sketch.js"></script>
+    <script src="manos.js"></script>
+  </body>
+</html>

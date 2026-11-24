@@ -4,79 +4,232 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <meta name="theme-color" content="#000000" />
+    <meta name="description" content="Fauna de la corriente de Humboldt en realidad aumentada: tócala con tus manos, sin marcador." />
     <title>Fauna de Humboldt RA</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.11.13/p5.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@ar-js-org/artoolkit5-js@0.3.2/dist/ARToolkit.js"></script>
     <script src="nyar4p5.js"></script>
     <style>
-      html, body { margin: 0; height: 100%; overflow: hidden; background: #000; color: #fff;
-        font: 15px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif;
+      :root {
+        --vidrio: rgba(10, 16, 22, .52);
+        --vidrio-fuerte: rgba(10, 16, 22, .78);
+        --borde: rgba(255, 255, 255, .14);
+        --texto: #f4f7fa;
+        --suave: #a9b8c6;
+        --acento: #ffb35c;
+        --holo: #7fe3ff;
+        --rosa: #ff4d6d;
+        --seguro-arriba: env(safe-area-inset-top);
+        --seguro-abajo: env(safe-area-inset-bottom);
+      }
+      * { box-sizing: border-box; }
+      html, body { margin: 0; height: 100%; overflow: hidden; background: #000; color: var(--texto);
+        font: 15px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
         -webkit-tap-highlight-color: transparent; user-select: none; -webkit-user-select: none; }
+      button { font: inherit; color: inherit; cursor: pointer; }
+      button:focus-visible, a:focus-visible { outline: 2px solid var(--holo); outline-offset: 2px; }
+      .vidrio { background: var(--vidrio); border: 1px solid var(--borde);
+        backdrop-filter: blur(14px) saturate(1.2); -webkit-backdrop-filter: blur(14px) saturate(1.2); }
 
-      #top { position: fixed; top: 0; left: 0; right: 0; z-index: 2; pointer-events: none;
-        padding: calc(env(safe-area-inset-top) + 10px) 16px 12px;
-        background: linear-gradient(#000b, #0000); }
-      .fila { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
-      #estado { display: flex; align-items: center; gap: 8px; font-weight: 600; text-shadow: 0 1px 3px #000; min-width: 0; }
+      /* capas: cámara + escena 3D (p5) → manos y corazones (2D) → interfaz */
+      canvas.p5Canvas { z-index: 1; touch-action: none; }
+      #capa { position: fixed; inset: 0; width: 100%; height: 100%; z-index: 2; pointer-events: none; }
+
+      /* ---------- barra superior: solo estado, cariño y menú ---------- */
+      #top { position: fixed; top: 0; left: 0; right: 0; z-index: 3; pointer-events: none;
+        display: flex; justify-content: space-between; align-items: center; gap: 10px;
+        padding: calc(var(--seguro-arriba) + 10px) 12px 0; }
+      #estado { pointer-events: auto; display: flex; align-items: center; gap: 8px; min-width: 0; max-width: 70vw;
+        padding: 7px 12px 7px 10px; border-radius: 999px; font-size: 13px; font-weight: 600; border: 1px solid var(--borde); }
       #estado span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-      .dot { width: 10px; height: 10px; border-radius: 50%; background: #f1c40f; flex: none; }
-      .dot.ok { background: #2ecc71; } .dot.error { background: #e74c3c; }
-      #top a { pointer-events: auto; color: #fff; background: #fff2; border: 1px solid #fff5;
-        padding: 6px 12px; border-radius: 999px; text-decoration: none; font-size: 13px; white-space: nowrap; }
+      .dot { width: 8px; height: 8px; border-radius: 50%; background: #f1c40f; flex: none; box-shadow: 0 0 0 3px #f1c40f33; }
+      .dot.ok { background: #2ecc71; box-shadow: 0 0 0 3px #2ecc7133; } .dot.error { background: #e74c3c; box-shadow: 0 0 0 3px #e74c3c33; }
+      .derecha { display: flex; gap: 8px; align-items: center; pointer-events: auto; }
+      .redondo { width: 40px; height: 40px; border-radius: 50%; display: grid; place-items: center; padding: 0; font-size: 18px; }
+      #carino-anillo { position: relative; }
+      #carino-anillo svg { position: absolute; inset: -1px; width: 40px; height: 40px; transform: rotate(-90deg); }
+      #carino-anillo circle { fill: none; stroke-width: 3; }
+      #carino-anillo .fondo { stroke: #ffffff1f; }
+      #carino-anillo .valor { stroke: var(--rosa); stroke-linecap: round; stroke-dasharray: 113.1; stroke-dashoffset: 113.1;
+        transition: stroke-dashoffset .4s; }
+      #carino-anillo .corazon { position: relative; font-size: 15px; transition: transform .2s; }
+      #carino-anillo.late .corazon { transform: scale(1.3); }
 
-      #animales { display: flex; gap: 6px; margin-top: 10px; overflow-x: auto; scrollbar-width: none; pointer-events: auto; }
+      /* ---------- menú ---------- */
+      #menu { position: fixed; z-index: 6; top: calc(var(--seguro-arriba) + 58px); right: 12px; width: min(280px, calc(100vw - 24px));
+        padding: 6px; border-radius: 16px; background: var(--vidrio-fuerte); transform-origin: top right;
+        transition: opacity .18s, transform .18s; }
+      #menu[hidden] { display: block; opacity: 0; transform: scale(.95); pointer-events: none; visibility: hidden; }
+      #menu button, #menu a { display: flex; align-items: center; gap: 10px; width: 100%; padding: 11px 12px; border: 0; border-radius: 10px;
+        background: none; text-align: left; color: var(--texto); text-decoration: none; font-size: 14px; }
+      #menu button:hover, #menu a:hover { background: #ffffff12; }
+      #menu .valor { margin-left: auto; color: var(--suave); font-size: 13px; }
+      #menu button[aria-pressed="true"] .valor::after { content: 'Sí'; color: var(--holo); }
+      #menu button[aria-pressed="false"] .valor::after { content: 'No'; }
+      #menu hr { border: 0; border-top: 1px solid var(--borde); margin: 4px 6px; }
+
+      /* ---------- avisos breves ---------- */
+      #toast { position: fixed; left: 50%; top: calc(var(--seguro-arriba) + 62px); z-index: 4; pointer-events: none;
+        max-width: calc(100vw - 32px); transform: translate(-50%, -6px); opacity: 0;
+        padding: 8px 14px; border-radius: 999px; background: rgba(255, 251, 244, .94); color: #2a211a;
+        font-weight: 700; font-size: 14px; box-shadow: 0 6px 20px #0005; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+        transition: opacity .2s, transform .3s cubic-bezier(.2, .9, .3, 1.2); }
+      #toast.visible { opacity: 1; transform: translate(-50%, 0); }
+
+      /* dato nuevo: una línea que se va sola; tocarla abre la ficha */
+      #burbuja { position: fixed; left: 50%; bottom: calc(var(--seguro-abajo) + 92px); z-index: 4; transform: translate(-50%, 8px);
+        max-width: min(420px, calc(100vw - 32px)); display: flex; align-items: center; gap: 10px; text-align: left;
+        padding: 8px 8px 8px 14px; border-radius: 14px; opacity: 0; pointer-events: none; transition: opacity .25s, transform .3s; }
+      #burbuja.visible { opacity: 1; transform: translate(-50%, 0); pointer-events: auto; }
+      #burbuja .tag { display: block; font-size: 10px; letter-spacing: .08em; text-transform: uppercase; color: var(--acento); font-weight: 800; }
+      #burbuja .tit { display: block; font-size: 14px; font-weight: 700; }
+      #burbuja .mas { flex: none; font-size: 12px; font-weight: 700; color: var(--holo); padding: 6px 10px; border-radius: 999px; background: #7fe3ff1a; }
+
+      /* ---------- dock inferior ---------- */
+      #dock { position: fixed; z-index: 3; left: 50%; bottom: calc(var(--seguro-abajo) + 14px); transform: translateX(-50%);
+        display: flex; align-items: center; gap: 6px; padding: 6px; border-radius: 999px; max-width: calc(100vw - 24px); }
+      #animales { display: flex; gap: 2px; overflow-x: auto; scrollbar-width: none; }
       #animales::-webkit-scrollbar { display: none; }
-      #animales button { flex: none; font: 600 13px system-ui, sans-serif; color: #fff; cursor: pointer;
-        background: #0008; border: 1px solid #fff4; border-radius: 999px; padding: 7px 12px;
-        transition: background .15s, border-color .15s, transform .1s; }
-      #animales button:active { transform: scale(.96); }
-      #animales button[aria-pressed="true"] { background: #ffb35c; border-color: #ffb35c; color: #1a1205; }
+      #animales button { flex: none; width: 44px; height: 44px; border-radius: 50%; border: 0; padding: 0; background: none; font-size: 22px;
+        transition: background .15s, transform .1s; position: relative; }
+      #animales button:active, .dock-btn:active { transform: scale(.92); }
+      #animales button[aria-pressed="true"] { background: var(--acento); box-shadow: 0 0 0 2px #ffb35c55; }
+      .sep { width: 1px; height: 28px; background: var(--borde); flex: none; }
+      .dock-btn { flex: none; width: 44px; height: 44px; border-radius: 50%; border: 0; padding: 0; background: #ffffff10; font-size: 19px;
+        display: grid; place-items: center; transition: background .15s, transform .1s; }
+      .dock-btn[aria-pressed="true"] { background: var(--holo); color: #06202a; }
+      #recolocar[hidden] { display: none; }
 
-      #ficha { position: fixed; left: 16px; right: 16px; bottom: calc(env(safe-area-inset-bottom) + 16px);
-        max-width: 480px; margin: 0 auto; padding: 14px 16px; border-radius: 16px; z-index: 2;
-        background: rgba(10, 20, 30, .8); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
-        border: 1px solid #fff2; pointer-events: none;
-        transform: translateY(12px); opacity: 0; transition: opacity .25s, transform .25s; }
-      #ficha.visible { opacity: 1; transform: none; }
-      #ficha .cab { display: flex; justify-content: space-between; align-items: baseline; gap: 10px;
-        padding-bottom: 8px; margin-bottom: 8px; border-bottom: 1px solid #fff1; }
-      #ficha .nombre { font-weight: 700; }
-      #ficha .cient { font-style: italic; color: #9fb0c0; font-size: 13px; margin-left: 4px; }
-      #ficha .badge { flex: none; font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 999px;
-        background: #fff2; color: #fff; white-space: nowrap; }
-      #ficha .badge.vu { background: #f39c12; color: #1a1205; }
-      #ficha .badge.en { background: #e74c3c; }
-      #ficha .badge.lc { background: #27ae60; }
-      #ficha .badge.nt { background: #f1c40f; color: #1a1205; }
-      #ficha .badge.eco { background: #2e86de; }
-      #ficha .tag { font-size: 12px; letter-spacing: .06em; text-transform: uppercase; color: #ffb35c; font-weight: 700; }
-      #ficha h2 { margin: 2px 0 6px; font-size: 18px; }
-      #ficha p { margin: 0; color: #dde6ee; }
-      #ficha .pie { margin-top: 10px; font-size: 12px; color: #9fb0c0; display: flex; justify-content: space-between; gap: 10px; }
+      /* ---------- ficha (solo cuando la pides) ---------- */
+      #ficha { position: fixed; z-index: 5; left: 50%; bottom: calc(var(--seguro-abajo) + 80px); width: min(460px, calc(100vw - 24px));
+        max-height: 46vh; overflow: auto; padding: 14px 16px 12px; border-radius: 18px; background: var(--vidrio-fuerte);
+        transform: translate(-50%, 12px); opacity: 0; pointer-events: none; transition: opacity .22s, transform .25s; }
+      #ficha.visible { transform: translate(-50%, 0); opacity: 1; pointer-events: auto; }
+      #ficha .cab { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; margin-bottom: 8px; }
+      #ficha .nombre { font-weight: 800; font-size: 16px; }
+      #ficha .cient { display: block; font-style: italic; color: var(--suave); font-size: 13px; }
+      #ficha .badge { flex: none; font-size: 11px; font-weight: 800; padding: 3px 9px; border-radius: 999px; background: #fff2; white-space: nowrap; }
+      #ficha .badge.vu { background: #f39c12; color: #1a1205; } #ficha .badge.en { background: #e74c3c; }
+      #ficha .badge.lc { background: #27ae60; } #ficha .badge.nt { background: #f1c40f; color: #1a1205; } #ficha .badge.eco { background: #2e86de; }
+      #ficha .tag { font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--acento); font-weight: 800; }
+      #ficha h2 { margin: 2px 0 6px; font-size: 17px; }
+      #ficha p { margin: 0; color: #dde6ee; font-size: 14px; }
+      #ficha .pie { margin-top: 12px; display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--suave); }
+      #ficha .pie .hint { margin-left: auto; }
+      #ficha .nav { width: 34px; height: 34px; border-radius: 50%; border: 1px solid var(--borde); background: #ffffff0d; font-size: 16px; }
+      #ficha-cerrar { width: 32px; height: 32px; border-radius: 50%; border: 0; background: #ffffff14; flex: none; }
+
+      /* ---------- portada / cómo jugar ---------- */
+      #intro { position: fixed; inset: 0; z-index: 8; display: grid; place-items: center; padding: 24px 16px;
+        background: radial-gradient(120% 80% at 50% 20%, rgba(8, 40, 56, .86), rgba(2, 8, 12, .94)); transition: opacity .35s; }
+      #intro.oculto { opacity: 0; pointer-events: none; }
+      #intro .caja { width: min(420px, 100%); text-align: center; }
+      #intro .emoji { font-size: 44px; letter-spacing: 4px; }
+      #intro h1 { margin: 8px 0 4px; font-size: 26px; line-height: 1.15; }
+      #intro .sub { margin: 0 0 18px; color: var(--suave); }
+      #intro ul { list-style: none; margin: 0 0 20px; padding: 0; display: grid; gap: 6px; text-align: left; }
+      #intro li { display: flex; gap: 12px; align-items: center; padding: 9px 12px; border-radius: 12px; background: #ffffff0b; font-size: 14px; }
+      #intro li b { font-size: 20px; width: 26px; text-align: center; flex: none; }
+      #empezar { width: 100%; padding: 14px; border: 0; border-radius: 14px; background: var(--holo); color: #06202a;
+        font-weight: 800; font-size: 16px; }
+      #intro .nota { margin: 12px 0 0; font-size: 12px; color: var(--suave); }
+
+      /* ---------- diagnóstico ---------- */
+      #diag { position: fixed; left: 12px; right: 12px; top: calc(var(--seguro-arriba) + 60px); z-index: 7;
+        max-width: 560px; margin: 0 auto; padding: 12px; border-radius: 12px; background: rgba(5, 10, 15, .94);
+        border: 1px solid #fff3; max-height: 60vh; overflow: auto; }
+      #diag[hidden] { display: none; }
+      #diag pre { margin: 0 0 10px; white-space: pre-wrap; word-break: break-word; font: 12px/1.45 ui-monospace, Consolas, monospace; color: #d7e3ee; }
+      #diag button { font-weight: 600; color: #111; background: #fff; border: 0; border-radius: 999px; padding: 6px 14px; }
+
+      .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+      @media (max-width: 380px) {
+        #animales button, .dock-btn { width: 40px; height: 40px; font-size: 19px; }
+        #dock { gap: 4px; }
+      }
+      @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
     </style>
   </head>
   <body>
-    <div id="top">
-      <div class="fila">
-        <div id="estado"><span class="dot"></span><span>Cargando…</span></div>
-        <span style="display:flex;gap:6px">
-          <a href="marcona.html">🗺️ Mapa Marcona</a>
-          <a href="manos.html">✋ Tócalo con tus manos</a>
-          <a href="hiro.png" target="_blank" rel="noopener">Ver marcador</a>
-        </span>
+    <canvas id="capa"></canvas>
+
+    <header id="top">
+      <button type="button" id="estado" class="vidrio" title="Toca para ver el diagnóstico"><span class="dot"></span><span>Cargando…</span></button>
+      <div class="derecha">
+        <button type="button" id="recolocar" class="redondo vidrio" title="Traerlo frente a ti" aria-label="Traerlo frente a ti">🎯</button>
+        <div id="carino-anillo" class="redondo vidrio" role="img" aria-label="Cariño: 0 %">
+          <svg viewBox="0 0 40 40" aria-hidden="true"><circle class="fondo" cx="20" cy="20" r="18" /><circle class="valor" id="carino" cx="20" cy="20" r="18" /></svg>
+          <span class="corazon" aria-hidden="true">💗</span>
+        </div>
+        <button type="button" id="abrir-menu" class="redondo vidrio" aria-haspopup="true" aria-expanded="false" aria-controls="menu" title="Opciones">⋯</button>
       </div>
-      <nav id="animales" aria-label="Elegir animal"></nav>
-    </div>
-    <div id="ficha" aria-live="polite">
+    </header>
+
+    <nav id="menu" class="vidrio" hidden aria-label="Opciones">
+      <button type="button" id="skin">🧤 Piel de las manos <span class="valor" id="skin-valor"></span></button>
+      <button type="button" id="puntos" aria-pressed="false">👁 Ver puntos de la mano <span class="valor"></span></button>
+      <button type="button" id="espejo" aria-pressed="false">🪞 Cámara en espejo <span class="valor"></span></button>
+      <button type="button" id="ayuda">❔ Cómo jugar</button>
+      <hr />
+      <a href="marcona.html">🗺️ Mapa 3D de Marcona</a>
+      <a href="respaldo-hiro/index.html">🎯 Versión con marcador Hiro</a>
+      <button type="button" id="abrir-diag">🩺 Diagnóstico</button>
+    </nav>
+
+    <div id="toast" role="status" aria-live="polite"></div>
+
+    <button type="button" id="burbuja" class="vidrio" aria-label="Ver el dato completo">
+      <span><span class="tag" id="burbuja-tag"></span><span class="tit" id="burbuja-tit"></span></span>
+      <span class="mas">Leer</span>
+    </button>
+
+    <section id="ficha" aria-label="Ficha del animal" aria-live="polite">
       <div class="cab">
         <div><span class="nombre" id="ficha-animal"></span><span class="cient" id="ficha-cient"></span></div>
         <span class="badge" id="ficha-badge"></span>
+        <button type="button" id="ficha-cerrar" aria-label="Cerrar ficha">✕</button>
       </div>
       <div class="tag" id="ficha-tag"></div>
       <h2 id="ficha-titulo"></h2>
       <p id="ficha-texto"></p>
-      <div class="pie"><span id="ficha-num"></span><span id="ficha-hint"></span></div>
+      <div class="pie">
+        <button type="button" class="nav" id="dato-ant" aria-label="Dato anterior">‹</button>
+        <span id="ficha-num"></span>
+        <button type="button" class="nav" id="dato-sig" aria-label="Dato siguiente">›</button>
+        <span class="hint" id="ficha-hint"></span>
+      </div>
+    </section>
+
+    <div id="dock" class="vidrio">
+      <nav id="animales" aria-label="Elegir animal"></nav>
+      <span class="sep" aria-hidden="true"></span>
+      <button type="button" id="modo" class="dock-btn" aria-pressed="false" title="Ponerlo sobre tu mano">🖐️</button>
+      <button type="button" id="info" class="dock-btn" aria-pressed="false" aria-controls="ficha" title="Datos del animal">ℹ️</button>
     </div>
+
+    <div id="intro" role="dialog" aria-modal="true" aria-labelledby="intro-titulo">
+      <div class="caja">
+        <div class="emoji" aria-hidden="true">🐧🦦🦭</div>
+        <h1 id="intro-titulo">Fauna de Humboldt</h1>
+        <p class="sub">Los animales del mar de Marcona aparecen frente a ti. Juega con ellos usando tus manos.</p>
+        <ul>
+          <li><b>👆</b> Tócalo con un dedo: reacciona y te cuenta un dato</li>
+          <li><b>🖐️</b> Pasa la mano abierta encima: acarícialo</li>
+          <li><b>🤏</b> Junta pulgar e índice y llévalo al pico: comida</li>
+          <li><b>✊</b> Cierra el puño sobre él: levántalo</li>
+          <li><b>👋</b> Salúdalo de lejos</li>
+        </ul>
+        <button type="button" id="empezar">Empezar</button>
+        <p class="nota">Necesita la cámara. Si lo pierdes de vista, toca 🎯 arriba para traerlo.</p>
+      </div>
+    </div>
+
+    <div id="diag" hidden>
+      <pre></pre>
+      <button type="button" id="diag-cerrar">Cerrar</button>
+    </div>
+
     <script src="sketch.js"></script>
+    <script src="manos.js"></script>
   </body>
 </html>

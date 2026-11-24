@@ -1,8 +1,8 @@
-// Realidad aumentada con el marcador Hiro + tus manos
-// El animal aparece parado sobre el marcador Hiro (como en index.html) y MediaPipe Hand Landmarker
-// (el mismo modelo .task del cuaderno de Python) sigue los 21 puntos de cada mano en la misma imagen.
-// Las zonas del animal (cabeza, pico, panza...) se proyectan desde el marcador a la pantalla, así que
-// siguen al pingüino aunque muevas el papel o la cámara (en Python eran coordenadas fijas).
+// Fauna de Humboldt en realidad aumentada, SIN marcador + tus manos
+// El animal aparece sobre una plataforma de luz frente a la cámara y se queda "anclado" en el espacio
+// gracias al giroscopio del celular (si giras el celular, él se queda donde estaba). 🎯 lo trae de vuelta.
+// MediaPipe Hand Landmarker (el mismo modelo .task del cuaderno de Python) sigue los 21 puntos de cada
+// mano; las zonas del animal (cabeza, pico, panza...) se proyectan a la pantalla para tocarlas.
 //
 //   👆 Tocar:      la punta del índice entra rápido al animal → reacciona y muestra otro dato
 //   🖐️ Acariciar:  la mano abierta se mueve encima → se queda quieto, se balancea y suelta corazones
@@ -10,13 +10,12 @@
 //   ✊ Levantar:   cierra la mano en puño sobre el animal → lo agarras; ábrela para soltarlo
 //   👋 Saludar:    mano abierta de lado a lado, lejos del animal → te mira y te responde
 //
-// Las manos se dibujan con una "piel" de RV (holograma, guante o robot): botón 🧤.
+// Modo 🖐️ "En mi mano": el animal se sube a tu palma abierta y juegas con la otra mano.
+// La versión anterior con el marcador Hiro quedó como respaldo en respaldo-hiro/.
 // Sin detector también se prueba con el mouse o el dedo: clic = tocar, arrastrar = acariciar,
-// mantener presionado sobre el animal = agarrarlo.
-// Si la mano tapa el marcador, el animal se queda en su sitio un momento (SOSTENER_S).
-// Toca el estado (arriba a la izquierda) o abre la página con ?diag para ver el diagnóstico.
+// mantener presionado sobre el animal = agarrarlo. ?diag abre el diagnóstico.
 //
-// Este archivo se carga después de sketch.js y reemplaza su setup() y draw().
+// Este archivo se carga después de sketch.js (contenido, modelos y texturas) y reemplaza su setup() y draw().
 
 const MP_URL = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14';
 const MODELO_LOCAL = 'modelos/hand_landmarker.task';
@@ -46,9 +45,6 @@ for (const id of IDS) EST[id] = {
   pos: null, vy: 0, desde: null, vueltaT: 0, agarre: null, vela: 0, base: null, esc: 1,
 };
 
-// Si el marcador se tapa (por ejemplo, con la mano), el animal se queda anclado en la última posición buena:
-const ANCLA_S = 3;         // segundos sin marcador y sin manos
-const ANCLA_MANO_S = 30;   // segundos sin marcador mientras haya una mano a la vista (o lo tengas agarrado)
 const GRAVEDAD = 1800;     // mm/s² (el animal cae rápido, como un juguete)
 const SKINS = ['holo', 'guante', 'robot', 'ninguno'];
 const SKIN_NOMBRE = { holo: 'Holograma', guante: 'Guante', robot: 'Robot', ninguno: 'Sin piel' };
@@ -56,7 +52,6 @@ const SKIN_NOMBRE = { holo: 'Holograma', guante: 'Guante', robot: 'Robot', ningu
 let video, capa, ctx, lienzo, piel, pctx, detector = null, espejo = false, verPuntos = false, skin = 'holo';
 let detectorEstado = 'cargando';   // 'cargando' | 'ok' | 'error'
 const detectorInfo = { modelo: '', delegate: '', creando: false };
-let ultimoVistoT = -1e9;           // última vez que se vio el marcador (s)
 let manos = [], manosPrev = new Map();
 const costo = { ms: 0, ultimoVideoT: -1, ultimaDet: 0 };
 const L = { x: 0, y: 0, kx: 1, ky: 1 };   // lienzo de p5 (escalado en "cover") → pantalla
@@ -70,8 +65,9 @@ const inicioT = performance.now();
 // =====================================================================
 
 function setup() {
-  for (const id of ['estado', 'ficha', 'ficha-animal', 'ficha-cient', 'ficha-badge', 'ficha-tag',
-    'ficha-titulo', 'ficha-texto', 'ficha-num', 'ficha-hint', 'animales', 'toast', 'carino', 'carino-txt', 'diag']) el[id] = document.getElementById(id);
+  for (const id of ['estado', 'ficha', 'ficha-animal', 'ficha-cient', 'ficha-badge', 'ficha-tag', 'ficha-titulo', 'ficha-texto',
+    'ficha-num', 'ficha-hint', 'animales', 'toast', 'carino', 'carino-anillo', 'diag', 'menu', 'abrir-menu', 'burbuja',
+    'burbuja-tag', 'burbuja-tit', 'info', 'intro', 'recolocar', 'skin-valor']) el[id] = document.getElementById(id);
   const hash = location.hash.slice(1);
   let guardado = null, skinGuardado = null;
   try { guardado = localStorage.getItem('animal'); skinGuardado = localStorage.getItem('skin'); } catch (e) {}
@@ -87,18 +83,10 @@ function setup() {
     anotarError(errorCamara);
   }
 
-  // RA: el mismo arranque que index.html (sketch.js)
+  // cámara a pantalla completa; nyar4p5 da la proyección de la cámara real (no se busca ningún marcador)
   NyAR.createARCanvas(this, { fit: 'cover' });
   cam = NyAR.createCamera(this);               // trasera en el celular, webcam en la PC
   ar = new NyAR.MultiMarker(this, width, height);
-  if (MI_IMAGEN) {
-    ar.setConfidenceThreshold(0.7);
-    loadImage(MI_IMAGEN, img => { imgMarcador = img; ar.addARMarker(img, TAMANO_MM); });
-  } else {
-    ar.addARMarker('hiro', TAMANO_MM);
-    ar.setConfidenceThreshold(0.45);   // acepta el Hiro un poco tapado (los saltos falsos los filtra actualizarPose)
-  }
-  ar.setLostDelay(5);
   escucharGiro();
   // en la PC la webcam te mira: en espejo, mover la mano a la derecha la mueve a la derecha en pantalla
   espejo = !esCelular();
@@ -108,7 +96,7 @@ function setup() {
   prepararTexturas();
   armarAtlas();
 
-  video = cam.elt;   // MediaPipe lee el mismo video que el detector del marcador
+  video = cam.elt;   // MediaPipe lee el mismo video que se ve de fondo
   lienzo = document.querySelector('canvas.p5Canvas');
   capa = document.getElementById('capa');
   ctx = capa.getContext('2d');
@@ -116,35 +104,13 @@ function setup() {
   pctx = piel.getContext('2d');
   ajustarCapa();
   punteroComoMano(lienzo);
+  prepararInterfaz();
 
-  document.getElementById('puntos').addEventListener('click', e => {
-    verPuntos = !verPuntos;
-    e.currentTarget.setAttribute('aria-pressed', String(verPuntos));
-  });
-  const bEspejo = document.getElementById('espejo');
-  bEspejo.setAttribute('aria-pressed', String(espejo));
-  bEspejo.addEventListener('click', () => {
-    espejo = !espejo;
-    ar.setMirror(espejo);
-    bEspejo.setAttribute('aria-pressed', String(espejo));
-    camCuadro.dibujar = true;
-  });
-  const bSkin = document.getElementById('skin');
-  bSkin.title = 'Piel de las manos: ' + SKIN_NOMBRE[skin];
-  bSkin.addEventListener('click', () => {
-    skin = SKINS[(SKINS.indexOf(skin) + 1) % SKINS.length];
-    try { localStorage.setItem('skin', skin); } catch (e) {}
-    bSkin.title = 'Piel de las manos: ' + SKIN_NOMBRE[skin];
-    avisar('🧤 Manos: ' + SKIN_NOMBRE[skin]);
-  });
-  const bModo = document.getElementById('modo');
   let modoGuardado = null;
   try { modoGuardado = localStorage.getItem('modo'); } catch (e) {}
   ponerModoPalma(/[?&]palma/.test(location.search) || modoGuardado === 'palma', true);
-  bModo.addEventListener('click', () => ponerModoPalma(!modoPalma));
-  el.estado.addEventListener('click', () => { el.diag.hidden = !el.diag.hidden; actualizarDiag(); });
-  document.getElementById('diag-cerrar').addEventListener('click', () => { el.diag.hidden = true; });
   if (/[?&]diag/.test(location.search)) el.diag.hidden = false;
+  if (/[?&](diag|sinintro)/.test(location.search)) cerrarIntro();
   setInterval(actualizarDiag, 500);
 
   cargarDetector();
@@ -152,11 +118,30 @@ function setup() {
 
 function esCelular() { return /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent) || (navigator.maxTouchPoints > 1 && /Macintosh/.test(navigator.userAgent)); }
 
+// (reemplaza al de sketch.js) solo copia la imagen de la cámara cuando llega un cuadro nuevo: sin marcador
+// no hay nada que buscar, así que el celular queda libre para el detector de manos
+function detectar() {
+  const v = cam && cam.elt;
+  if (v !== camCuadro.video) {
+    Object.assign(camCuadro, { video: v, nuevo: true, ok: false, vigila: false });
+    if (v && v.requestVideoFrameCallback) {
+      const cb = () => { camCuadro.nuevo = true; if (camCuadro.video === v) v.requestVideoFrameCallback(cb); };
+      v.requestVideoFrameCallback(cb);
+      camCuadro.vigila = true;
+    }
+  }
+  if (camCuadro.vigila && !camCuadro.nuevo && camCuadro.ok) return true;
+  camCuadro.nuevo = false;
+  camCuadro.ok = ar.capture(cam);
+  if (camCuadro.ok) camCuadro.dibujar = true;
+  return camCuadro.ok;
+}
+
 function draw() {
   const t = millis() / 1000, dt = min(0.1, deltaTime / 1000);
   if (ar.error) { background(0); return estado('error', 'Error de RA: ' + ar.error.message); }
-  if (!ar.ready) { background(0); return estado('', 'Cargando motor de RA…'); }
-  if (!detectar()) {   // (sketch.js) la cámara todavía no entrega imagen
+  if (!ar.ready) { background(0); return estado('', 'Cargando…'); }
+  if (!detectar()) {   // la cámara todavía no entrega imagen
     background(0);
     if (errorCamara) return estado('error', errorCamara + ' (toca aquí)');
     if (performance.now() - inicioT > 8000) return estado('error', 'La cámara no entrega imagen: revisa el permiso (toca aquí)');
@@ -164,56 +149,49 @@ function draw() {
   }
   medirLienzo();
   detectarManos();
-  if (modoPalma) return dibujarModoPalma(t, dt);   // 🖐️ modo extra: el animal sobre tu mano (sin Hiro)
+  if (modoPalma) return dibujarModoPalma(t, dt);   // 🖐️ el animal sobre tu mano
 
-  actualizarPose(t);
-  const marcador = ar.isDetected(0);
-  if (marcador) { ultimoVistoT = t; visto = true; }
-  const conMano = !!puntero || manos.some(m => t - m.t < 0.35);
-  const agarrando = IDS.some(id => EST[id].modo === 'agarrado');
-  const perdido = t - ultimoVistoT;
-  const tapado = !marcador && visto && !!POSE.mat && (perdido < ANCLA_S || ((conMano || agarrando) && perdido < ANCLA_MANO_S));
-  const hay = (marcador && !!POSE.mat) || tapado;
-  POSE_VISTA = poseActual();
-  CAM = POSE_VISTA ? rayo(0, 0).o : null;
+  if (!LIBRE.mat || LIBRE.pendiente) colocarEscena();
+  POSE_VISTA = poseLibre();
+  CAM = rayo(0, 0).o;
 
-  if (camCuadro.dibujar) {   // solo se redibuja la escena 3D cuando llega un cuadro nuevo de la cámara
+  // solo se redibuja cuando llega un cuadro nuevo de la cámara: la escena y la imagen se mueven juntas
+  if (camCuadro.dibujar) {
     camCuadro.dibujar = false;
     background(0);
     ar.applyCamera();
     ar.drawBackground();
-    if (hay) {
-      push();
-      applyMatrix(...matrizP5(POSE_VISTA));   // como ar.beginTransform(0), pero con la pose filtrada/anclada
-      push();
-      noStroke();
-      rotateX(HALF_PI);   // +Y arriba, +Z hacia quien mira
-      luces();
-      if (actual === 'todos') {
-        escenaManos('lobo',     t, { x: 0,   z: -24, escala: 0.85, desfase: 0 });
-        escenaManos('pinguino', t, { x: -24, z: 12,  escala: 0.5,  desfase: 3.1 });
-        escenaManos('nutria',   t, { x: 24,  z: 16,  escala: 0.55, desfase: 6.3 });
-        escenaManos('zarcillo', t, { x: 0,   z: 28,  escala: 0.6,  desfase: 2.0 });
-      } else {
-        escenaManos(actual, t, { x: 0, z: 0, escala: 1, desfase: 0 });
-      }
-      pop();
-      pop();
+    push();
+    applyMatrix(...matrizP5(POSE_VISTA));
+    push();
+    noStroke();
+    rotateX(HALF_PI);   // +Y arriba, +Z hacia quien mira
+    luces();
+    plataforma(t);
+    if (actual === 'todos') {
+      escenaManos('lobo',     t, { x: 0,   z: -24, escala: 0.85, desfase: 0 });
+      escenaManos('pinguino', t, { x: -24, z: 12,  escala: 0.5,  desfase: 3.1 });
+      escenaManos('nutria',   t, { x: 24,  z: 16,  escala: 0.55, desfase: 6.3 });
+      escenaManos('zarcillo', t, { x: 0,   z: 28,  escala: 0.6,  desfase: 2.0 });
+    } else {
+      escenaManos(actual, t, { x: 0, z: 0, escala: 1, desfase: 0 });
     }
+    pop();
+    pop();
   }
-  if (!hay) for (const id of IDS) EST[id].zonas = [];   // sin marcador no hay nada que tocar
 
-  interactuar(t, dt, hay);
+  interactuar(t, dt, true);
   dibujarCapa(t, dt);
+  const fuera = indicadorFuera();
   actualizarFicha();
 
-  if (!hay) estado('', visto ? 'Busca otra vez el marcador Hiro' : 'Apunta la cámara al marcador Hiro');
-  else if (tapado) estado('ok', GIRO ? '✋ Marcador tapado: lo sostengo en su sitio' : '✋ Marcador tapado: no muevas mucho la cámara');
-  else if (detectorEstado === 'cargando') estado('', 'Cargando detector de manos…');
-  else if (detectorEstado === 'error') estado('error', 'Sin detector de manos: usa el dedo (toca aquí)');
+  const nombre = actual === 'todos' ? 'Todos los animales' : INFO[actual].nombre;
+  if (fuera) estado('', `Gira ${fuera} · o toca 🎯`);
+  else if (detectorEstado === 'cargando') estado('', 'Preparando tus manos…');
+  else if (detectorEstado === 'error') estado('error', 'Sin detector de manos: usa el dedo');
   else {
     const n = manos.filter(m => t - m.t < 0.35).length;
-    estado('ok', n ? `✋ ${n === 1 ? 'Mano detectada' : '2 manos'} · ${round(costo.ms)} ms` : `${INFO[actual].nombre}: acerca tu mano`);
+    estado('ok', n ? `${nombre} · ${n === 1 ? 'mano' : '2 manos'} ✋` : `${nombre} · acerca tu mano`);
   }
 }
 
@@ -319,78 +297,131 @@ function rayo(sx, sy) {
   const y = (sy - L.y) / L.ky;
   if (ar.mirror) x = width - x;
   const u = x * ar.width / width, v = y * ar.height / height;
-  const m = POSE_VISTA || ar.getTransMat(0);   // cámara = R · marcador + t (ARToolKit)
+  const m = POSE_VISTA;   // cámara = R · piso + t (como ARToolKit)
   const RT = q => [m[0] * q[0] + m[4] * q[1] + m[8] * q[2], m[1] * q[0] + m[5] * q[1] + m[9] * q[2], m[2] * q[0] + m[6] * q[1] + m[10] * q[2]];
   const aEscena = q => ({ x: q[0], y: q[2], z: -q[1] });   // marcador → escena (por el rotateX(HALF_PI))
   return { o: aEscena(RT([-m[3], -m[7], -m[11]])), d: aEscena(RT([(u - ar.cx) / ar.fx, (v - ar.cy) / ar.fy, 1])) };
 }
 
 // =====================================================================
-// ANCLAJE: pose del marcador filtrada, y sostenida cuando la mano lo tapa
-// Las poses son la matriz 3×4 de ARToolKit (fila a fila): cámara = R · marcador + t, en mm.
+// ESCENA SIN MARCADOR: un "piso virtual" frente a ti, anclado con el giroscopio
+// Se arma la misma pose que daría ARToolKit para un papel apoyado delante de la cámara
+// (matriz 3×4 fila a fila: cámara = R · piso + t, en mm), así que todo lo demás (dibujo, zonas,
+// agarrar y soltar, gravedad) funciona igual que con el Hiro. El piso queda horizontal de verdad
+// si hay giroscopio; si giras el celular, la escena se corrige con lo que giró (se queda en su sitio).
 // =====================================================================
 
-const POSE = { mat: null, frame: -1, candidato: null, cuenta: 0, giro0: null };
+const LIBRE = { mat: null, giro0: null, pendiente: false };
 let POSE_VISTA = null;   // la pose con la que se dibuja este cuadro
 let GIRO = null;         // orientación actual del celular (matriz 3×3 dispositivo → mundo), si hay sensor
+const DIST_LIBRE = { uno: 240, todos: 300 };   // mm desde la cámara hasta el centro de la plataforma
+const BAJA = 0.2;                               // un poco por debajo del centro de la imagen (× distancia)
 
-// cuánto cambió una pose respecto de otra: > 1 es un salto brusco (más de ~15 % de distancia o ~30°)
-function diferenciaPose(a, b) {
-  const dt = Math.hypot(a[3] - b[3], a[7] - b[7], a[11] - b[11]) / max(50, Math.hypot(b[3], b[7], b[11]));
-  let dr = 0;
-  for (const i of [0, 1, 2, 4, 5, 6, 8, 9, 10]) dr += (a[i] - b[i]) ** 2;
-  return max(dt / 0.15, Math.sqrt(dr) / 0.5);
-}
-
-// la rotación mezclada deja de ser rotación pura: se vuelve a enderezar (Gram-Schmidt por columnas)
-function ortonormalizar(m) {
-  let x = [m[0], m[4], m[8]], y = [m[1], m[5], m[9]];
-  const n = v => { const l = Math.hypot(...v) || 1; return v.map(c => c / l); };
-  x = n(x);
-  const d = x[0] * y[0] + x[1] * y[1] + x[2] * y[2];
-  y = n([y[0] - d * x[0], y[1] - d * x[1], y[2] - d * x[2]]);
-  const z = [x[1] * y[2] - x[2] * y[1], x[2] * y[0] - x[0] * y[2], x[0] * y[1] - x[1] * y[0]];
-  [m[0], m[4], m[8]] = x; [m[1], m[5], m[9]] = y; [m[2], m[6], m[10]] = z;
-  return m;
-}
-
-// se llama cada cuadro; solo trabaja cuando el detector procesó una imagen nueva
-function actualizarPose(t) {
-  if (ar.frameCount === POSE.frame) return;
-  POSE.frame = ar.frameCount;
-  if (!ar.isDetected(0)) return;
-  const m = Array.from(ar.getTransMat(0));
-  if (!m.every(Number.isFinite)) return;
-  if (!POSE.mat) { POSE.mat = m; POSE.giro0 = GIRO && GIRO.slice(); return; }
-  const salto = diferenciaPose(m, POSE.mat);
-  if (salto > 1) {
-    // un dedo tapando parte del Hiro da poses falsas por un instante: el salto se acepta
-    // solo si se repite (parecido) en 3 imágenes seguidas, como cuando mueves de verdad la cámara
-    if (POSE.candidato && diferenciaPose(m, POSE.candidato) < 0.5) POSE.cuenta++;
-    else { POSE.candidato = m; POSE.cuenta = 1; }
-    if (POSE.cuenta < 3) return;
-    POSE.mat = m;
-  } else {
-    // movimiento normal: suavizado (menos temblor), más rápido cuanto más se movió
-    const k = constrain(0.35 + salto * 0.5, 0.35, 0.85);
-    POSE.mat = ortonormalizar(POSE.mat.map((v, i) => lerp(v, m[i], k)));
+function colocarEscena() {
+  const D = actual === 'todos' ? DIST_LIBRE.todos : DIST_LIBRE.uno;
+  let arriba;
+  if (GIRO) arriba = mulv(ejesCamara(), [GIRO[6], GIRO[7], GIRO[8]]);   // "arriba" del mundo, visto desde la cámara
+  else {
+    const fi = radians(espejo ? 72 : 50);   // sin sensor: la webcam mira de frente; el celular, algo hacia abajo
+    arriba = [0, -Math.sin(fi), -Math.cos(fi)];
   }
-  POSE.candidato = null; POSE.cuenta = 0;
-  POSE.giro0 = GIRO && GIRO.slice();
+  // "adelante" sobre el piso: hacia donde mira la cámara, sin la parte vertical
+  const plano = v => { const d = punto(v, arriba); return [v[0] - d * arriba[0], v[1] - d * arriba[1], v[2] - d * arriba[2]]; };
+  let ad = plano([0, 0, 1]);
+  if (Math.hypot(...ad) < 0.25) ad = plano([0, -1, 0]);   // mirando justo hacia abajo: adelante = arriba de la pantalla
+  ad = unitario(ad);
+  const x = cruz(ad, arriba);
+  const tt = [0, D * BAJA, D];
+  LIBRE.mat = [x[0], ad[0], arriba[0], tt[0], x[1], ad[1], arriba[1], tt[1], x[2], ad[2], arriba[2], tt[2]];
+  LIBRE.giro0 = GIRO && GIRO.slice();
+  LIBRE.pendiente = false;
+  fueraDesde = -1;
 }
 
-// pose para dibujar: la filtrada; si el marcador está tapado y hay giroscopio, se corrige
-// con lo que giró el celular desde la última vez que se vio (así no se "pega" a la pantalla)
-function poseActual() {
-  if (!POSE.mat) return null;
-  if (ar.isDetected(0) || !GIRO || !POSE.giro0) return POSE.mat;
+// 🎯 traerlo de vuelta frente a la cámara
+function recolocar(avisando) {
+  for (const id of IDS) Object.assign(EST[id], { modo: 'ruta', pos: null, agarre: null });
+  LIBRE.pendiente = true;
+  if (avisando) avisar('🎯 ¡Aquí está!');
+}
+
+// pose para dibujar: la de colocarEscena, corregida con lo que giró el celular desde entonces
+function poseLibre() {
+  if (GIRO && !LIBRE.giro0) colocarEscena();   // el sensor empezó a responder después: se coloca de nuevo
+  const m = LIBRE.mat;
+  if (!GIRO || !LIBRE.giro0) return m;
   const K = ejesCamara(), Kt = trasp(K);
-  const M = mul3(K, mul3(trasp(GIRO), mul3(POSE.giro0, Kt)));   // cámara antes → cámara ahora
-  const R = [POSE.mat[0], POSE.mat[1], POSE.mat[2], POSE.mat[4], POSE.mat[5], POSE.mat[6], POSE.mat[8], POSE.mat[9], POSE.mat[10]];
-  const r = mul3(M, R), tt = [POSE.mat[3], POSE.mat[7], POSE.mat[11]];
-  const t2 = [0, 1, 2].map(i => M[i * 3] * tt[0] + M[i * 3 + 1] * tt[1] + M[i * 3 + 2] * tt[2]);
+  const M = mul3(K, mul3(trasp(GIRO), mul3(LIBRE.giro0, Kt)));   // cámara antes → cámara ahora
+  const R = [m[0], m[1], m[2], m[4], m[5], m[6], m[8], m[9], m[10]];
+  const r = mul3(M, R), t2 = mulv(M, [m[3], m[7], m[11]]);
   return [r[0], r[1], r[2], t2[0], r[3], r[4], r[5], t2[1], r[6], r[7], r[8], t2[2]];
 }
+
+// si la escena quedó fuera de la vista, una flecha en el borde indica hacia dónde girar
+let fueraDesde = -1;
+function indicadorFuera() {
+  const m = POSE_VISTA, t = millis() / 1000;
+  if (!m) return '';
+  // centro del animal: un poco por encima de la plataforma
+  const c = [m[3] + m[2] * 25, m[7] + m[6] * 25, m[11] + m[10] * 25];
+  let sx, sy, dentro = false;
+  const cx = innerWidth / 2, cy = innerHeight / 2;
+  if (c[2] > 20) {
+    const [x, y] = ar.imageToScreen(ar.fx * c[0] / c[2] + ar.cx, ar.fy * c[1] / c[2] + ar.cy);
+    [sx, sy] = lienzoAPantalla(x, y);
+    dentro = sx > 0 && sx < innerWidth && sy > 0 && sy < innerHeight;
+  } else {   // detrás de la cámara: solo importa la dirección
+    sx = cx + (ar.mirror ? 1 : -1) * c[0] * 1e3; sy = cy - c[1] * 1e3;
+  }
+  if (dentro) { fueraDesde = -1; return ''; }
+  if (fueraDesde < 0) fueraDesde = t;
+  if (t - fueraDesde < 0.6) return '';
+  // flecha en el borde, en la dirección del animal
+  const dx = sx - cx, dy = sy - cy, ang = Math.atan2(dy, dx);
+  const mx = cx - 44, my = cy - 120;   // margen: no tapar la barra de arriba ni el dock
+  const k = min(Math.abs(mx / (dx || 1e-6)), Math.abs(my / (dy || 1e-6)));
+  const px = cx + dx * k, py = cy + dy * k + 10;
+  const pulso = 1 + 0.08 * sin(t * 6);
+  ctx.save();
+  ctx.translate(px, py);
+  ctx.fillStyle = 'rgba(10, 16, 22, .6)'; ctx.strokeStyle = 'rgba(127, 227, 255, .9)'; ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.arc(0, 0, 26 * pulso, 0, TWO_PI); ctx.fill(); ctx.stroke();
+  ctx.font = '22px system-ui, sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillText(EMOJI[actual] || '🐧', 0, 1);
+  ctx.rotate(ang);
+  ctx.fillStyle = '#7fe3ff';
+  ctx.beginPath(); ctx.moveTo(38 * pulso, 0); ctx.lineTo(28 * pulso, -8); ctx.lineTo(28 * pulso, 8); ctx.closePath(); ctx.fill();
+  ctx.restore();
+  if (t - fueraDesde > 6) LIBRE.pendiente = true;   // mucho rato sin verlo: vuelve solo frente a ti
+  return Math.abs(dx) * innerHeight > Math.abs(dy) * innerWidth ? (dx < 0 ? 'a la izquierda' : 'a la derecha') : (dy < 0 ? 'hacia arriba' : 'hacia abajo');
+}
+
+// plataforma de luz bajo los animales (estilo holograma); se dibuja en el piso (y = 0) de la escena
+function plataforma(t) {
+  const R = actual === 'todos' ? 62 : 40;
+  push();
+  translate(0, -0.6, 0);
+  rotateX(HALF_PI);
+  fill(20, 70, 95, 120);
+  circle(0, 0, R * 2);
+  noFill();
+  strokeWeight(1.4);
+  stroke(127, 227, 255, 200);
+  circle(0, 0, R * 2);
+  stroke(127, 227, 255, 90 + 60 * sin(t * 3));
+  circle(0, 0, R * 2 * (0.7 + 0.05 * sin(t * 2)));
+  const k = (t * 0.6) % 1;   // onda que se abre
+  stroke(127, 227, 255, 150 * (1 - k));
+  circle(0, 0, R * 2 * (0.3 + 0.75 * k));
+  noStroke();
+  pop();
+}
+
+// vectores de 3
+function punto(a, b) { return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]; }
+function cruz(a, b) { return [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]; }
+function unitario(v) { const l = Math.hypot(...v) || 1; return v.map(c => c / l); }
+function mulv(m, v) { return [0, 1, 2].map(i => m[i * 3] * v[0] + m[i * 3 + 1] * v[1] + m[i * 3 + 2] * v[2]); }
 
 // matriz de ARToolKit → matriz de p5 para applyMatrix (igual que ar.getMarkerMatrix)
 function matrizP5(m) {
@@ -438,7 +469,7 @@ function escucharGiro() {
 }
 
 // =====================================================================
-// 🖐️ MODO "EN TU MANO": el animal se para sobre la palma abierta (no hace falta el Hiro)
+// 🖐️ MODO "EN TU MANO": el animal se para sobre la palma abierta
 // Se dibuja con una cámara virtual en la que 1 unidad = 1 píxel del lienzo, justo sobre la palma,
 // del tamaño de tu mano y girando con ella. Con la otra mano lo tocas, acaricias o le das comida.
 // =====================================================================
@@ -452,18 +483,21 @@ function idPalma() { return actual === 'todos' ? 'pinguino' : actual; }
 
 function ponerModoPalma(on, inicio) {
   modoPalma = on;
-  try { localStorage.setItem('modo', on ? 'palma' : 'hiro'); } catch (e) {}
+  try { localStorage.setItem('modo', on ? 'palma' : 'frente'); } catch (e) {}
   const b = document.getElementById('modo');
   b.setAttribute('aria-pressed', String(on));
-  b.title = on ? 'Volver al marcador Hiro' : 'Poner al animal sobre tu mano';
+  b.title = on ? 'Volver a ponerlo frente a ti' : 'Ponerlo sobre tu mano';
+  b.setAttribute('aria-label', b.title);
+  el.recolocar.hidden = on;
   document.body.classList.toggle('palma', on);
   for (const id of IDS) {   // nada queda agarrado ni cayendo al cambiar de modo
     const E = EST[id];
     Object.assign(E, { modo: 'ruta', pos: null, agarre: null, zonas: [] });
   }
   SOBRE.lado = null; SOBRE.vis = 0;
+  if (!on) LIBRE.pendiente = true;   // de vuelta frente a ti
   camCuadro.dibujar = true;
-  if (!inicio) avisar(on ? '🖐️ Abre tu mano frente a la cámara' : '🎯 De vuelta al marcador Hiro');
+  if (!inicio) avisar(on ? '🖐️ Abre tu mano frente a la cámara' : '✨ De vuelta frente a ti');
 }
 
 // elige la mano que lo sostiene (la misma mientras se vea; una nueva tiene que estar abierta) y la sigue suave
@@ -501,7 +535,7 @@ function dibujarModoPalma(t, dt) {
     camCuadro.dibujar = false;
     background(0);
     ar.applyCamera();
-    ar.drawBackground();   // la imagen de la cámara, igual que en el modo Hiro
+    ar.drawBackground();   // la imagen de la cámara
     for (const k of IDS) EST[k].zonas = [];
     if (visible) escenaPalma(id, t);
   }
@@ -509,7 +543,7 @@ function dibujarModoPalma(t, dt) {
   interactuar(t, dt, visible);
   dibujarCapa(t, dt);
   actualizarFicha();
-  if (detectorEstado === 'cargando') estado('', 'Cargando detector de manos…');
+  if (detectorEstado === 'cargando') estado('', 'Preparando tus manos…');
   else if (detectorEstado === 'error') estado('error', 'Sin detector de manos (toca aquí)');
   else if (!visible) estado('', '🖐️ Abre tu mano frente a la cámara');
   else estado('ok', `${INFO[id].nombre} en tu mano · juega con la otra`);
@@ -770,6 +804,7 @@ function tocarAnimal(id, t, x, y, zona) {
   chispas(x, y);
   dato = (dato + 1) % INFO[actual].datos.length;     // y muestra el siguiente dato
   mostrarDato();
+  mostrarBurbuja();
   const parte = { cabeza: 'la cabeza', cola: 'la cola', panza: 'la panza', pico: 'el pico' }[zona] || 'el lomo';
   avisar(`👆 ¡Boop! Le tocaste ${parte} ${ARTICULO[id] === 'la' ? 'a la' : 'al'} ${NOMBRE_CORTO[id]}`);
 }
@@ -1026,7 +1061,7 @@ function dibujarCapa(t, dt) {
       ctx.beginPath(); ctx.arc(m.palma[0], m.palma[1], max(10, m.escala * 0.35), 0, TWO_PI); ctx.stroke();
     }
     // etiqueta del gesto, como el putText del cuaderno
-    const gesto = m.pinza ? '🤏 PINZA' : m.puno ? '✊ PUÑO' : m.abierta ? '🖐️ ABIERTA' : m.apunta ? '👆 SEÑALA' : '';
+    const gesto = !verPuntos ? '' : m.pinza ? '🤏 PINZA' : m.puno ? '✊ PUÑO' : m.abierta ? '🖐️ ABIERTA' : m.apunta ? '👆 SEÑALA' : '';
     if (gesto) {
       ctx.font = '700 12px system-ui, sans-serif'; ctx.textAlign = 'center';
       const [gx, gy] = [m.palma[0], m.palma[1] + m.escala * 0.9];
@@ -1152,16 +1187,134 @@ function dibujarDetallesPiel(m, t, P, w) {
 }
 
 // =====================================================================
-// INTERFAZ
+// INTERFAZ: lo mínimo a la vista para que el protagonista sea la escena.
+// Arriba: estado, cariño (anillo) y menú ⋯. Abajo: un dock con los animales, 🖐️, 🎯 e ℹ️.
+// Los datos salen como una burbuja breve al tocar al animal; la ficha completa solo si la pides.
 // =====================================================================
 
-let fichaCarino = -1;
+const EMOJI = {};
+for (const id in INFO) EMOJI[id] = INFO[id].boton.split(' ')[0];
+
+// (reemplaza al de sketch.js) botones redondos solo con el emoji
+function crearBotones() {
+  for (const id of ORDEN) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.textContent = EMOJI[id];
+    b.dataset.id = id;
+    const nombre = INFO[id].boton.split(' ').slice(1).join(' ');
+    b.title = nombre;
+    b.setAttribute('aria-label', nombre);
+    b.addEventListener('click', () => {
+      if (id === actual) return;
+      elegir(id);
+      avisar(`${EMOJI[id]} ${id === 'todos' ? 'Todos los animales' : INFO[id].nombre}`);
+    });
+    el.animales.appendChild(b);
+  }
+}
+
+// (reemplaza al de sketch.js) además vuelve a colocar la escena, que cambia de tamaño con "Todos"
+function elegir(id) {
+  const antes = actual;
+  actual = id;
+  dato = 0;
+  try { localStorage.setItem('animal', id); } catch (e) {}
+  for (const b of el.animales.children) b.setAttribute('aria-pressed', String(b.dataset.id === id));
+  const I = INFO[id];
+  el['ficha-animal'].textContent = I.nombre;
+  el['ficha-cient'].textContent = I.cient;
+  el['ficha-badge'].textContent = I.estado;
+  el['ficha-badge'].className = 'badge ' + I.clase;
+  el['ficha-hint'].textContent = I.hint;
+  mostrarDato();
+  if (typeof LIBRE !== 'undefined' && LIBRE.mat && (antes === 'todos') !== (id === 'todos')) recolocar(false);
+  if (typeof camCuadro !== 'undefined') camCuadro.dibujar = true;
+}
+
+function prepararInterfaz() {
+  // menú ⋯
+  const menu = el.menu, bMenu = el['abrir-menu'];
+  const abrirMenu = on => { menu.hidden = !on; bMenu.setAttribute('aria-expanded', String(on)); };
+  bMenu.addEventListener('click', e => { e.stopPropagation(); abrirMenu(menu.hidden); });
+  addEventListener('pointerdown', e => { if (!menu.hidden && !menu.contains(e.target) && e.target !== bMenu) abrirMenu(false); });
+  addEventListener('keydown', e => { if (e.key === 'Escape') { abrirMenu(false); abrirFicha(false); } });
+
+  const bPuntos = document.getElementById('puntos');
+  bPuntos.addEventListener('click', () => { verPuntos = !verPuntos; bPuntos.setAttribute('aria-pressed', String(verPuntos)); });
+  const bEspejo = document.getElementById('espejo');
+  bEspejo.setAttribute('aria-pressed', String(espejo));
+  bEspejo.addEventListener('click', () => {
+    espejo = !espejo;
+    ar.setMirror(espejo);
+    bEspejo.setAttribute('aria-pressed', String(espejo));
+    camCuadro.dibujar = true;
+  });
+  const bSkin = document.getElementById('skin');
+  el['skin-valor'].textContent = SKIN_NOMBRE[skin];
+  bSkin.addEventListener('click', () => {
+    skin = SKINS[(SKINS.indexOf(skin) + 1) % SKINS.length];
+    try { localStorage.setItem('skin', skin); } catch (e) {}
+    el['skin-valor'].textContent = SKIN_NOMBRE[skin];
+  });
+  document.getElementById('ayuda').addEventListener('click', () => { abrirMenu(false); el.intro.classList.remove('oculto'); el.intro.hidden = false; });
+  document.getElementById('abrir-diag').addEventListener('click', () => { abrirMenu(false); el.diag.hidden = false; actualizarDiag(); });
+  el.estado.addEventListener('click', () => { el.diag.hidden = !el.diag.hidden; actualizarDiag(); });
+  document.getElementById('diag-cerrar').addEventListener('click', () => { el.diag.hidden = true; });
+
+  // dock
+  document.getElementById('modo').addEventListener('click', () => ponerModoPalma(!modoPalma));
+  el.recolocar.addEventListener('click', () => recolocar(true));
+  el.info.addEventListener('click', () => abrirFicha(!el.ficha.classList.contains('visible')));
+
+  // ficha y burbuja
+  document.getElementById('ficha-cerrar').addEventListener('click', () => abrirFicha(false));
+  const pasar = d => { const n = INFO[actual].datos.length; dato = (dato + d + n) % n; mostrarDato(); };
+  document.getElementById('dato-ant').addEventListener('click', () => pasar(-1));
+  document.getElementById('dato-sig').addEventListener('click', () => pasar(1));
+  el.burbuja.addEventListener('click', () => abrirFicha(true));
+
+  // portada: el toque en "Empezar" también sirve para pedir el giroscopio en el iPhone
+  document.getElementById('empezar').addEventListener('click', cerrarIntro);
+}
+
+function cerrarIntro() {
+  el.intro.classList.add('oculto');
+  setTimeout(() => { if (el.intro.classList.contains('oculto')) el.intro.hidden = true; }, 400);
+  if (typeof LIBRE !== 'undefined') LIBRE.pendiente = true;   // se coloca frente a donde apuntas ahora
+}
+
+function abrirFicha(on) {
+  el.ficha.classList.toggle('visible', on);
+  el.info.setAttribute('aria-pressed', String(on));
+  if (on) el.burbuja.classList.remove('visible');
+}
+
+// dato nuevo (al tocar al animal): una línea abajo que se va sola
+let burbujaTimer = 0;
+function mostrarBurbuja() {
+  const d = INFO[actual].datos[dato];
+  if (el.ficha.classList.contains('visible')) return;   // la ficha abierta ya lo muestra
+  el['burbuja-tag'].textContent = d.tag;
+  el['burbuja-tit'].textContent = d.titulo;
+  el.burbuja.classList.add('visible');
+  clearTimeout(burbujaTimer);
+  burbujaTimer = setTimeout(() => el.burbuja.classList.remove('visible'), 4500);
+}
+
+let fichaCarino = -1, carinoLate = 0;
 function actualizarFicha() {
-  const t = millis() / 1000;
   const c = actual === 'todos' ? max(...IDS.map(id => EST[id].carino)) : EST[actual].carino;
   const pct = round(c * 100);
-  if (pct !== fichaCarino) { fichaCarino = pct; el.carino.style.width = pct + '%'; el['carino-txt'].textContent = pct + ' %'; }
-  for (const s of document.querySelectorAll('.gestos span')) s.classList.toggle('activo', t - ultimoGesto[s.dataset.g] < 0.8);
+  if (pct === fichaCarino) return;
+  if (pct > fichaCarino + 4 || (pct === 100 && fichaCarino < 100)) {   // late cuando sube
+    el['carino-anillo'].classList.add('late');
+    clearTimeout(carinoLate);
+    carinoLate = setTimeout(() => el['carino-anillo'].classList.remove('late'), 220);
+  }
+  fichaCarino = pct;
+  el.carino.style.strokeDashoffset = String(113.1 * (1 - c));
+  el['carino-anillo'].setAttribute('aria-label', `Cariño: ${pct} %`);
 }
 
 let toastTimer = 0;
@@ -1169,10 +1322,10 @@ function avisar(msg) {
   el.toast.textContent = msg;
   el.toast.classList.add('visible');
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => el.toast.classList.remove('visible'), 2200);
+  toastTimer = setTimeout(() => el.toast.classList.remove('visible'), 1800);
 }
 
-// (reemplaza al de sketch.js: aquí la tarjeta siempre está visible)
+// (reemplaza al de sketch.js)
 let ultimoEstadoManos = '';
 function estado(tipo, msg) {
   if (tipo + msg === ultimoEstadoManos) return;
@@ -1211,11 +1364,11 @@ function actualizarDiag() {
     `Navegador: ${navigator.userAgent.replace(/^Mozilla\/5\.0 /, '').slice(0, 90)}`,
     `HTTPS / contexto seguro: ${window.isSecureContext ? 'sí' : 'NO'} (${location.protocol})`,
     `Cámara: ${tr ? `${tr.readyState}, ${cfg.facingMode || '?'}` : 'sin abrir'} · video ${v.videoWidth || 0}×${v.videoHeight || 0}`,
-    `RA: ${ar ? (ar.error ? 'error: ' + ar.error.message : ar.ready ? 'lista' : 'cargando') : '—'} · lienzo ${width}×${height} · marcador ${ar && ar.isExist && ar.isExist(0) ? 'visible' : 'no'}`,
+    `RA: ${ar ? (ar.error ? 'error: ' + ar.error.message : ar.ready ? 'lista' : 'cargando') : '—'} · lienzo ${width}×${height} · modo ${modoPalma ? 'en la mano' : 'frente a ti'}`,
     `Detector de manos: ${detectorEstado}${detectorInfo.delegate ? ` (${detectorInfo.delegate}, modelo ${detectorInfo.modelo})` : ''} · ${round(costo.ms)} ms`,
     `Manos ahora: ${manos.filter(m => millis() / 1000 - m.t < 0.35).length} · cuadros por segundo: ${round(frameRate())}`,
     `Espejo: ${espejo ? 'sí' : 'no'} · piel: ${SKIN_NOMBRE[skin]} · giroscopio: ${GIRO ? 'sí' : 'no'}`,
-    `Marcador visto hace: ${ultimoVistoT > 0 ? (millis() / 1000 - ultimoVistoT).toFixed(1) + ' s' : '—'} · saltos descartados en espera: ${POSE.cuenta}`,
+    `Escena: ${LIBRE.mat ? `a ${round(Math.hypot(LIBRE.mat[3], LIBRE.mat[7], LIBRE.mat[11]))} mm` : 'sin colocar'} · anclada con giroscopio: ${LIBRE.giro0 ? 'sí' : 'no'}`,
     '',
     ERRORES.length ? 'Errores:' : 'Sin errores.',
     ...ERRORES.map(e => `  [${e.t} s] ${e.msg}`),

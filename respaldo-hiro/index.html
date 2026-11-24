@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#000000" />
+    <title>Fauna RA · respaldo Hiro</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.11.13/p5.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@ar-js-org/artoolkit5-js@0.3.2/dist/ARToolkit.js"></script>
+    <script src="../nyar4p5.js"></script>
+    <style>
+      html, body { margin: 0; height: 100%; overflow: hidden; background: #000; color: #fff;
+        font: 15px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif;
+        -webkit-tap-highlight-color: transparent; user-select: none; -webkit-user-select: none; }
+
+      #top { position: fixed; top: 0; left: 0; right: 0; z-index: 2; pointer-events: none;
+        padding: calc(env(safe-area-inset-top) + 10px) 16px 12px;
+        background: linear-gradient(#000b, #0000); }
+      .fila { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+      #estado { display: flex; align-items: center; gap: 8px; font-weight: 600; text-shadow: 0 1px 3px #000; min-width: 0; }
+      #estado span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .dot { width: 10px; height: 10px; border-radius: 50%; background: #f1c40f; flex: none; }
+      .dot.ok { background: #2ecc71; } .dot.error { background: #e74c3c; }
+      #top a { pointer-events: auto; color: #fff; background: #fff2; border: 1px solid #fff5;
+        padding: 6px 12px; border-radius: 999px; text-decoration: none; font-size: 13px; white-space: nowrap; }
+
+      #animales { display: flex; gap: 6px; margin-top: 10px; overflow-x: auto; scrollbar-width: none; pointer-events: auto; }
+      #animales::-webkit-scrollbar { display: none; }
+      #animales button { flex: none; font: 600 13px system-ui, sans-serif; color: #fff; cursor: pointer;
+        background: #0008; border: 1px solid #fff4; border-radius: 999px; padding: 7px 12px;
+        transition: background .15s, border-color .15s, transform .1s; }
+      #animales button:active { transform: scale(.96); }
+      #animales button[aria-pressed="true"] { background: #ffb35c; border-color: #ffb35c; color: #1a1205; }
+
+      #ficha { position: fixed; left: 16px; right: 16px; bottom: calc(env(safe-area-inset-bottom) + 16px);
+        max-width: 480px; margin: 0 auto; padding: 14px 16px; border-radius: 16px; z-index: 2;
+        background: rgba(10, 20, 30, .8); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+        border: 1px solid #fff2; pointer-events: none;
+        transform: translateY(12px); opacity: 0; transition: opacity .25s, transform .25s; }
+      #ficha.visible { opacity: 1; transform: none; }
+      #ficha .cab { display: flex; justify-content: space-between; align-items: baseline; gap: 10px;
+        padding-bottom: 8px; margin-bottom: 8px; border-bottom: 1px solid #fff1; }
+      #ficha .nombre { font-weight: 700; }
+      #ficha .cient { font-style: italic; color: #9fb0c0; font-size: 13px; margin-left: 4px; }
+      #ficha .badge { flex: none; font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 999px;
+        background: #fff2; color: #fff; white-space: nowrap; }
+      #ficha .badge.vu { background: #f39c12; color: #1a1205; }
+      #ficha .badge.en { background: #e74c3c; }
+      #ficha .badge.lc { background: #27ae60; }
+      #ficha .badge.nt { background: #f1c40f; color: #1a1205; }
+      #ficha .badge.eco { background: #2e86de; }
+      #ficha .tag { font-size: 12px; letter-spacing: .06em; text-transform: uppercase; color: #ffb35c; font-weight: 700; }
+      #ficha h2 { margin: 2px 0 6px; font-size: 18px; }
+      #ficha p { margin: 0; color: #dde6ee; }
+      #ficha .pie { margin-top: 10px; font-size: 12px; color: #9fb0c0; display: flex; justify-content: space-between; gap: 10px; }
+    </style>
+  </head>
+  <body>
+    <div id="top">
+      <div class="fila">
+        <div id="estado"><span class="dot"></span><span>Cargando…</span></div>
+        <span style="display:flex;gap:6px">
+          <a href="../index.html">⭐ Versión principal</a>
+          <a href="../marcona.html">🗺️ Mapa Marcona</a>
+          <a href="manos.html">✋ Tócalo con tus manos</a>
+          <a href="hiro.png" target="_blank" rel="noopener">Ver marcador</a>
+        </span>
+      </div>
+      <nav id="animales" aria-label="Elegir animal"></nav>
+    </div>
+    <div id="ficha" aria-live="polite">
+      <div class="cab">
+        <div><span class="nombre" id="ficha-animal"></span><span class="cient" id="ficha-cient"></span></div>
+        <span class="badge" id="ficha-badge"></span>
+      </div>
+      <div class="tag" id="ficha-tag"></div>
+      <h2 id="ficha-titulo"></h2>
+      <p id="ficha-texto"></p>
+      <div class="pie"><span id="ficha-num"></span><span id="ficha-hint"></span></div>
+    </div>
+    <script src="sketch.js"></script>
+  </body>
+</html>

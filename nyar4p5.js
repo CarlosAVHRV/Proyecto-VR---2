@@ -1410,6 +1410,24 @@
 
   // ---------- detección ----------
 
+  /**
+   * Solo copia la imagen de la cámara al fondo (mismo recorte que detect), SIN buscar marcadores.
+   * Para escenas sin marcador: mucho más liviano (no lee píxeles ni corre ARToolKit).
+   */
+  MM.capture = function (source) {
+    if (!this.ready) return false;
+    var el = sourceElement(source);
+    if (!el) return false;
+    var s = sourceSize(el), sw = s[0], sh = s[1];
+    if (!sw || !sh || (el.readyState !== undefined && el.readyState < 2)) return false;
+    var aspect = this.width / this.height;
+    var cw = sw, ch = sh;
+    if (sw / sh > aspect) cw = sh * aspect; else ch = sw / aspect;
+    this.sourceSize = [sw, sh];
+    this.bctx.drawImage(el, (sw - cw) / 2, (sh - ch) / 2, cw, ch, 0, 0, this.width, this.height);
+    return true;
+  };
+
   /** Copia la fuente al buffer de proceso (recorte centrado al aspecto) y detecta. Devuelve false si no hay frame. */
   MM.detect = function (source) {
     if (!this.ready) return false;
